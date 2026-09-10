@@ -7,7 +7,7 @@ every new client migration.
 
 ## Part 1 — One-Time Setup
 
-### Step 1: Install Python
+### Step 1: Install Python (disregard if already installed)
 
 Open **Command Prompt** or **PowerShell** and run:
 
@@ -27,7 +27,7 @@ You should see something like `Python 3.13.x` and a pip version number. If
 `python` isn't recognized, restart your PC once — winget sometimes needs a
 fresh terminal session to register PATH changes.
 
-### Step 2: Install Git (if not installed on your computer)
+### Step 2: Install Git (disregard if already installed)
 
 Still in the terminal:
 
@@ -44,7 +44,7 @@ git --version
 ### Step 3: Install the required Python packages
 
 ```
-pip install requests beautifulsoup4 openpyxl
+pip install requests beautifulsoup4 lxml openpyxl
 ```
 
 Steps 1–3 only need to be done once per machine (or again if you reinstall
@@ -171,6 +171,9 @@ python sitemap_to_redirect_map.py https://www.oldsite.com/ -o CompName301RW.xlsx
 
 - **`'python' is not recognized...`** — Python isn't on PATH yet. Reopen
   the terminal, or restart the PC, then try again.
+- **`bs4.exceptions.FeatureNotFound: Couldn't find a tree builder with the
+  features you requested: xml`** — the `lxml` package is missing. Run
+  `pip install lxml` and try again.
 - **`Couldn't locate a sitemap for ...`** — expected on many
   Proweaver-style sites; it automatically falls back to crawling. No action
   needed unless you passed `--no-crawl`.
