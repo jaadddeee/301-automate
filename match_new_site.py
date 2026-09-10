@@ -34,6 +34,7 @@ from sitemap_to_redirect_map import (
     is_homepage_url,
     clean_title,
     fetch_page_data,
+    resolve_duplicate_titles,
 )
 
 
@@ -43,34 +44,43 @@ def get_new_site_pages(site_url: str, max_pages: int = 300, no_crawl: bool = Fal
     try:
         sitemap_url = find_sitemap_url(site_url)
         print(f"Using sitemap: {sitemap_url}", file=sys.stderr)
-        all_urls = collect_urls(sitemap_url)
+        all_urls = collect_urls(sitemap_url)  # [(url, sitemap_type), ...]
     except RuntimeError as e:
         if no_crawl:
             raise
         print(f"{e}", file=sys.stderr)
         print("Falling back to crawling the site for pages instead...", file=sys.stderr)
-        all_urls = crawl_site(site_url, max_pages=max_pages)
+        crawled = crawl_site(site_url, max_pages=max_pages)
+        all_urls = [(u, None) for u in crawled]
         print(f"Crawled {len(all_urls)} page(s).", file=sys.stderr)
 
-    urls = [u for u in all_urls if not is_excluded_url(u)]
+    urls = [(u, t) for u, t in all_urls if not is_excluded_url(u)]
 
     parsed = urlparse(site_url)
     site_root = f"{parsed.scheme}://{parsed.netloc}/"
 
-    pages = []
-    for i, url in enumerate(urls, 1):
+    entries = []
+    for i, (url, sitemap_type) in enumerate(urls, 1):
         if is_homepage_url(url, site_root):
-            title = "Home"
+            title, heading = "Home", None
+        elif sitemap_type == "post":
+            print(f"  [{i}/{len(urls)}] (blog post per sitemap, skipped) -> {url}", file=sys.stderr)
+            continue
         else:
-            raw_title, is_post = fetch_page_data(url)
-            if is_post:
+            raw_title, is_post, heading = fetch_page_data(url)
+            if sitemap_type is None and is_post:
                 print(f"  [{i}/{len(urls)}] (blog post, skipped) -> {url}", file=sys.stderr)
                 continue
             title = clean_title(raw_title)
+        entries.append({"title": title, "url": url, "heading": heading})
+        print(f"  [{i}/{len(urls)}] {title} -> {url}", file=sys.stderr)
 
-        slug = urlparse(url).path.strip("/") or "home"
-        pages.append((title, slug, url))
-        print(f"  [{i}/{len(urls)}] {title} -> {slug}", file=sys.stderr)
+    resolve_duplicate_titles(entries)
+
+    pages = []
+    for e in entries:
+        slug = urlparse(e["url"]).path.strip("/") or "home"
+        pages.append((e["title"], slug, e["url"]))
 
     return pages
 
@@ -116,6 +126,14 @@ def merge_into_workbook(xlsx_path: str, new_site_url: str, pages: list, out_path
 
 
 def main():
+    try:
+        import lxml  # noqa: F401
+    except ImportError:
+        sys.exit(
+            "Missing dependency: 'lxml' is required to parse sitemap.xml files.\n"
+            "Install it with:  pip install lxml"
+        )
+
     ap = argparse.ArgumentParser(description="Match a new site's pages into an existing redirect-map workbook.")
     ap.add_argument("workbook", help="Path to the .xlsx produced by sitemap_to_redirect_map.py")
     ap.add_argument("new_site", help="New site's base URL or sitemap.xml URL")

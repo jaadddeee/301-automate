@@ -34,7 +34,7 @@ def discover_wp_rest_pages(site_url: str, max_pages: int = 1000) -> list:
     """
     Query the WordPress REST API (/wp-json/wp/v2/pages) to enumerate EVERY
     published page, including orphaned ones with no incoming links anywhere
-    on the site — something neither a sitemap.xml nor link-crawling can
+    on the site -- something neither a sitemap.xml nor link-crawling can
     guarantee to catch. Works on any standard WordPress install where the
     REST API hasn't been disabled. Returns [] quietly if it's unavailable,
     blocked, or the site isn't WordPress.
@@ -107,8 +107,30 @@ def find_sitemap_url(base_url: str) -> str:
     raise RuntimeError(f"Couldn't locate a sitemap for {base_url}. Pass the sitemap.xml URL directly.")
 
 
+def _sitemap_type_from_filename(sitemap_url: str) -> str:
+    """
+    Classify a sub-sitemap by its filename, e.g. "post-sitemap.xml" -> "post",
+    "page-sitemap.xml" -> "page". Covers Yoast, RankMath, and All in One SEO
+    naming conventions. Returns None for anything else (category, tag,
+    author, custom post types, or a non-split single sitemap).
+    """
+    name = urlparse(sitemap_url).path.lower()
+    if re.search(r"[/_-]post[-_]sitemap", name) or re.search(r"sitemap[-_]post[-_.]", name):
+        return "post"
+    if re.search(r"[/_-]page[-_]sitemap", name) or re.search(r"sitemap[-_]page[-_.]", name):
+        return "page"
+    return None
+
+
 def collect_urls(sitemap_url: str, seen=None) -> list:
-    """Recursively expand sitemap indexes into a flat list of page URLs."""
+    """
+    Recursively expand sitemap indexes into a flat list of (url, sitemap_type)
+    tuples. sitemap_type is "post", "page", or None (see
+    _sitemap_type_from_filename) -- this is the most reliable signal for
+    telling blog posts apart from real pages, since it comes straight from
+    the SEO plugin's own content-type split rather than a guess based on
+    page markup, which can vary by theme.
+    """
     if seen is None:
         seen = set()
     if sitemap_url in seen:
@@ -128,7 +150,8 @@ def collect_urls(sitemap_url: str, seen=None) -> list:
         return urls
 
     # Regular sitemap: <url><loc> entries are pages
-    return [loc.get_text(strip=True) for loc in soup.select("url > loc")]
+    sitemap_type = _sitemap_type_from_filename(sitemap_url)
+    return [(loc.get_text(strip=True), sitemap_type) for loc in soup.select("url > loc")]
 
 
 # File extensions that are never real "pages" and shouldn't be followed while crawling
@@ -285,17 +308,43 @@ def is_homepage_url(url: str, site_root: str) -> bool:
 _SEP_RE = r"[\s\xa0]*\|[\s\xa0]*"
 _SEP_SPLIT_RE = re.compile(_SEP_RE)
 
+# A dash/hyphen surrounded by whitespace, e.g. "About Us – Site Name" or
+# "About Us - Site Name". Requires whitespace on both sides so it doesn't
+# touch a genuinely hyphenated word like "Co-op" or "Self-Sufficiency".
+_DASH_SEP_RE = re.compile(r"[\s\xa0]+[\u2013\u2014-][\s\xa0]+")
+
+# Titles matching this are left fully intact even if they contain a dash --
+# it's part of the page's actual name (a "Do Not Sell/Share My Personal
+# Information" CCPA notice page), not an SEO suffix to strip.
+_PROTECTED_DASH_TITLE_RE = re.compile(r"do not sell|share my personal information", re.IGNORECASE)
+
 
 def clean_title(raw_title: str) -> str:
     """
-    Strip everything from the first pipe ("|") separator onward,
-    e.g. "About Us | Home Care in Ohio | My Love Home Care LLC" -> "About Us".
-    Titles that use a dash/hyphen separator are left untouched.
+    Strip everything from the first pipe ("|") separator onward, then --
+    unless the title is a "Do Not Sell / Share My Personal Information"
+    privacy page, where the dash is part of the real page name -- also
+    strip everything from the first dash/en dash/em dash separator onward.
+    e.g. "About Us | Home Care in Ohio | My Love Home Care LLC" -> "About Us"
+         "About Us \u2013 My Love Home Care LLC" -> "About Us"
+         "Waymaker Global Ministry \u2013 Do Not Sell or Share My Personal Information"
+             -> left untouched
+
+    If a page's own title has nothing before the separator at all (e.g. the
+    raw title is just "- Site Name"), stripping would leave an empty
+    string, which is worse than the untrimmed title -- so in that case the
+    pipe-stripped (but not dash-stripped) version is kept instead. Genuinely
+    duplicate/blank titles are still caught and fixed by
+    resolve_duplicate_titles() using the page's on-page heading.
     """
     if not raw_title:
         return ""
     title = raw_title.strip()
-    return _SEP_SPLIT_RE.split(title, maxsplit=1)[0].strip()
+    after_pipe = _SEP_SPLIT_RE.split(title, maxsplit=1)[0].strip()
+    if _PROTECTED_DASH_TITLE_RE.search(after_pipe):
+        return after_pipe
+    after_dash = _DASH_SEP_RE.split(after_pipe, maxsplit=1)[0].strip()
+    return after_dash or after_pipe
 
 
 def _get_meta_content(soup: BeautifulSoup, prop_name: str) -> str:
@@ -395,7 +444,7 @@ def build_workbook(site_url: str, rows: list, out_path: str):
         ws[cell].alignment = center
 
     # Row 2: "N Pages" | Old Site | New Site
-    # A2 counts non-empty title cells from row 3 down (data rows only — starting
+    # A2 counts non-empty title cells from row 3 down (data rows only -- starting
     # here avoids counting A2's own formula cell, which would be circular),
     # so it stays accurate if rows are ever added/removed by hand later.
     ws["A2"] = '=COUNTA(A3:A1048576)&" Pages"'
@@ -451,33 +500,36 @@ def main():
     try:
         sitemap_url = find_sitemap_url(args.site)
         print(f"Using sitemap: {sitemap_url}", file=sys.stderr)
-        all_urls = collect_urls(sitemap_url)
+        all_urls = collect_urls(sitemap_url)  # [(url, sitemap_type), ...]
     except RuntimeError as e:
         if args.no_crawl:
             raise
         print(f"{e}", file=sys.stderr)
         print("Falling back to crawling the site for pages instead...", file=sys.stderr)
-        all_urls = crawl_site(args.site, max_pages=args.max_pages)
+        crawled = crawl_site(args.site, max_pages=args.max_pages)
+        all_urls = [(u, None) for u in crawled]  # no sitemap = no type info
         print(f"Crawled {len(all_urls)} page(s).", file=sys.stderr)
 
     if not args.no_rest_api:
         rest_urls = discover_wp_rest_pages(args.site)
         if rest_urls:
-            existing_keys = {_canonicalize(u) for u in all_urls}
-            added = [u for u in rest_urls if _canonicalize(u) not in existing_keys]
+            existing_keys = {_canonicalize(u) for u, _t in all_urls}
+            # The REST API's /pages endpoint only ever returns pages, so this is a
+            # trustworthy "page" classification too, not just an orphan-page catch.
+            added = [(u, "page") for u in rest_urls if _canonicalize(u) not in existing_keys]
             all_urls = all_urls + added
             if added:
                 print(f"WordPress REST API found {len(added)} additional page(s) "
                       f"(likely orphaned, no incoming links).", file=sys.stderr)
 
     if args.extra_urls:
-        existing_keys = {_canonicalize(u) for u in all_urls}
-        added = [u for u in args.extra_urls if _canonicalize(u) not in existing_keys]
+        existing_keys = {_canonicalize(u) for u, _t in all_urls}
+        added = [(u, None) for u in args.extra_urls if _canonicalize(u) not in existing_keys]
         all_urls = all_urls + added
         if added:
             print(f"Added {len(added)} manually-specified extra URL(s).", file=sys.stderr)
 
-    urls = [u for u in all_urls if not is_excluded_url(u)]
+    urls = [(u, t) for u, t in all_urls if not is_excluded_url(u)]
     skipped = len(all_urls) - len(urls)
     if skipped:
         print(f"Skipping {skipped} excluded URL(s) (.php/.pdf, feeds, blog posts, /sitemap).", file=sys.stderr)
@@ -488,12 +540,21 @@ def main():
 
     entries = []
     skipped_posts = 0
-    for i, url in enumerate(urls, 1):
+    for i, (url, sitemap_type) in enumerate(urls, 1):
         if is_homepage_url(url, site_root):
             title, heading = "Home", None
+        elif sitemap_type == "post":
+            # Trust the sitemap's own post/page split over any page-content guess.
+            skipped_posts += 1
+            print(f"  [{i}/{len(urls)}] (blog post per sitemap, skipped) -> {url}", file=sys.stderr)
+            continue
         else:
             raw_title, is_post, heading = fetch_page_data(url)
-            if is_post:
+            # Only fall back to the article:published_time guess when the sitemap
+            # gave us no type at all (crawl-only sites, or a single unsplit sitemap).
+            # Some themes stamp that meta tag on every page, so trusting it when we
+            # already KNOW (sitemap_type == "page") this is a real page would be wrong.
+            if sitemap_type is None and is_post:
                 skipped_posts += 1
                 print(f"  [{i}/{len(urls)}] (blog post, skipped) -> {url}", file=sys.stderr)
                 continue
