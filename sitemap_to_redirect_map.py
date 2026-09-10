@@ -12,8 +12,8 @@ Usage:
     python sitemap_to_redirect_map.py https://www.oldsite.com/ -o redirect_map.xlsx
     python sitemap_to_redirect_map.py https://www.oldsite.com/sitemap.xml -o redirect_map.xlsx
 
-Requires: requests, beautifulsoup4, openpyxl
-    pip install requests beautifulsoup4 openpyxl
+Requires: requests, beautifulsoup4, lxml, openpyxl
+    pip install requests beautifulsoup4 lxml openpyxl
 """
 
 import argparse
@@ -298,30 +298,79 @@ def clean_title(raw_title: str) -> str:
     return _SEP_SPLIT_RE.split(title, maxsplit=1)[0].strip()
 
 
+def _get_meta_content(soup: BeautifulSoup, prop_name: str) -> str:
+    tag = soup.find("meta", attrs={"property": prop_name})
+    content = tag.get("content", "").strip() if tag else ""
+    return content
+
+
+def extract_fallback_heading(soup: BeautifulSoup) -> str:
+    """
+    Return the first on-page heading (h1, then h2, then h3) that isn't just
+    the site's own branding -- e.g. a logo wrapped in <h1>{Site Name}</h1>.
+    Used as a fallback when a site's <title> tag is broken (some
+    WordPress/theme setups emit the exact same <title> on every single page,
+    which a plain title-tag scrape can't tell apart).
+    """
+    site_name = _get_meta_content(soup, "og:site_name").lower()
+    for level in ("h1", "h2", "h3"):
+        for tag in soup.find_all(level):
+            text = tag.get_text(strip=True)
+            if text and text.lower() != site_name:
+                return text
+    return ""
+
+
 def fetch_page_data(url: str) -> tuple:
     """
-    Fetch the page and return (raw_title, is_blog_post).
+    Fetch the page and return (raw_title, is_blog_post, fallback_heading).
 
     is_blog_post is detected via the <meta property="article:published_time">
     tag, which WordPress/Yoast adds to actual blog posts but never to regular
     pages (pages only ever get article:modified_time, if anything). This
     works even when posts live at a flat top-level URL with no /blog/ in the
     path, where a URL-pattern check alone can't tell them apart.
+
+    fallback_heading is the page's on-page heading text (see
+    extract_fallback_heading), used by resolve_duplicate_titles() when a
+    site's <title> tag turns out to be identical across many pages.
     """
     try:
         r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
         is_post = soup.find("meta", attrs={"property": "article:published_time"}) is not None
+        heading = extract_fallback_heading(soup)
         if soup.title and soup.title.string:
-            return soup.title.string.strip(), is_post
-        return "", is_post
+            return soup.title.string.strip(), is_post, heading
+        return "", is_post, heading
     except requests.RequestException:
         pass
     # Fallback: derive a readable title from the URL slug (can't check post status)
     path = urlparse(url).path.strip("/")
     slug = path.split("/")[-1] if path else "Home"
-    return (slug.replace("-", " ").replace("_", " ").title() or "Home"), False
+    return (slug.replace("-", " ").replace("_", " ").title() or "Home"), False, ""
+
+
+def resolve_duplicate_titles(entries: list) -> None:
+    """
+    entries: list of dicts with keys "title", "url", "heading" (mutated in
+    place). If the same title shows up across more than one URL, it's
+    almost certainly a site-wide <title> tag bug rather than genuinely
+    identical pages -- so swap in that page's on-page heading instead,
+    when one is available and actually differs from the broken title.
+    """
+    from collections import Counter
+    counts = Counter(e["title"] for e in entries if e["title"] != "Home")
+    for e in entries:
+        if e["title"] == "Home" or counts[e["title"]] <= 1:
+            continue
+        heading = e.get("heading") or ""
+        cleaned = clean_title(heading)
+        if cleaned and cleaned.lower() != e["title"].lower():
+            print(f"  Duplicate title detected for {e['url']} "
+                  f"-> using on-page heading \"{cleaned}\" instead", file=sys.stderr)
+            e["title"] = cleaned
 
 
 def build_workbook(site_url: str, rows: list, out_path: str):
@@ -373,6 +422,14 @@ def build_workbook(site_url: str, rows: list, out_path: str):
 
 
 def main():
+    try:
+        import lxml  # noqa: F401
+    except ImportError:
+        sys.exit(
+            "Missing dependency: 'lxml' is required to parse sitemap.xml files.\n"
+            "Install it with:  pip install lxml"
+        )
+
     ap = argparse.ArgumentParser(description="Build a redirect-map spreadsheet from a site's sitemap.")
     ap.add_argument("site", help="Old site's base URL or sitemap.xml URL")
     ap.add_argument("-o", "--output", default="redirect_map.xlsx", help="Output .xlsx path")
@@ -429,23 +486,26 @@ def main():
     parsed = urlparse(args.site)
     site_root = f"{parsed.scheme}://{parsed.netloc}/"
 
-    rows = []
+    entries = []
     skipped_posts = 0
     for i, url in enumerate(urls, 1):
         if is_homepage_url(url, site_root):
-            title = "Home"
+            title, heading = "Home", None
         else:
-            raw_title, is_post = fetch_page_data(url)
+            raw_title, is_post, heading = fetch_page_data(url)
             if is_post:
                 skipped_posts += 1
                 print(f"  [{i}/{len(urls)}] (blog post, skipped) -> {url}", file=sys.stderr)
                 continue
             title = clean_title(raw_title)
-        rows.append((title, url))
+        entries.append({"title": title, "url": url, "heading": heading})
         print(f"  [{i}/{len(urls)}] {title} -> {url}", file=sys.stderr)
 
     if skipped_posts:
         print(f"Skipped {skipped_posts} individual blog post(s).", file=sys.stderr)
+
+    resolve_duplicate_titles(entries)
+    rows = [(e["title"], e["url"]) for e in entries]
 
     build_workbook(site_root, rows, args.output)
     print(f"Done. Wrote {args.output}", file=sys.stderr)
