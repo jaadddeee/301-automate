@@ -27,7 +27,7 @@ You should see something like `Python 3.13.x` and a pip version number. If
 `python` isn't recognized, restart your PC once — winget sometimes needs a
 fresh terminal session to register PATH changes.
 
-### Step 2: Install Git
+### Step 2: Install Git (if not installed on your computer)
 
 Still in the terminal:
 
