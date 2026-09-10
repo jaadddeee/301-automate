@@ -27,38 +27,60 @@ You should see something like `Python 3.13.x` and a pip version number. If
 `python` isn't recognized, restart your PC once — winget sometimes needs a
 fresh terminal session to register PATH changes.
 
-### Step 2: Install the required packages
+### Step 2: Install Git
 
-In the same terminal:
+Still in the terminal:
+
+```
+winget install --id Git.Git -e
+```
+
+Close and reopen your terminal after it finishes, then confirm:
+
+```
+git --version
+```
+
+### Step 3: Install the required Python packages
 
 ```
 pip install requests beautifulsoup4 openpyxl
 ```
 
-This only needs to be done once per machine (or again if you reinstall
+Steps 1–3 only need to be done once per machine (or again if you reinstall
 Python).
 
-### Step 3: Save the scripts
+### Step 4: Clone the scripts repo
 
-Put `sitemap_to_redirect_map.py` and `match_new_site.py` in the **same
-folder** — `match_new_site.py` imports functions directly from the other
-file, so they have to sit side by side. Example:
+Pick a folder to keep it in — for example your `Downloads\Jade` folder —
+then run:
 
 ```
-C:\Users\Production\Downloads\Jade\301-Automation\
-    sitemap_to_redirect_map.py
-    match_new_site.py
+cd C:\Users\Production\Downloads\Jade
+git clone https://github.com/jaadddeee/301-automate.git
+```
+
+This creates a `301-automate` folder containing `sitemap_to_redirect_map.py`
+and `match_new_site.py` together (they need to stay side by side, since
+`match_new_site.py` imports functions directly from the other file).
+
+**Getting future updates:** whenever the scripts get updated in the repo,
+just pull the latest version instead of re-cloning:
+
+```
+cd C:\Users\Production\Downloads\Jade\301-automate
+git pull
 ```
 
 ---
 
 ## Part 2 — Running It on an Actual Migration
 
-### Step 1: Open a terminal in the scripts folder
+### Step 1: Open a terminal in the cloned repo folder
 
-In File Explorer, open the `301-Automation` folder, click the address bar,
-type `cmd` (or `powershell`), and hit Enter. This opens a terminal already
-pointed at that folder.
+In File Explorer, open the `301-automate` folder (from the `git clone` step
+above), click the address bar, type `cmd` (or `powershell`), and hit Enter.
+This opens a terminal already pointed at that folder.
 
 ### Step 2: Build the redirect map from the OLD site
 
