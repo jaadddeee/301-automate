@@ -35,6 +35,7 @@ from sitemap_to_redirect_map import (
     clean_title,
     fetch_page_data,
     resolve_duplicate_titles,
+    _canonicalize,
 )
 
 
@@ -53,10 +54,22 @@ def get_new_site_pages(site_url: str, max_pages: int = 300, no_crawl: bool = Fal
         all_urls = crawl_site(site_url, max_pages=max_pages)
         print(f"Crawled {len(all_urls)} page(s).", file=sys.stderr)
 
-    urls = [u for u in all_urls if not is_excluded_url(u)]
-
     parsed = urlparse(site_url)
     site_root = f"{parsed.scheme}://{parsed.netloc}/"
+
+    # Safety net: always include the homepage, even if the crawl/sitemap
+    # lookup found nothing at all (e.g. the site blocked automated
+    # requests) -- so this never silently produces zero pages to match.
+    if not any(_canonicalize(u) == _canonicalize(site_root) for u in all_urls):
+        print(
+            f"Warning: no pages were discovered at all -- adding just the "
+            f"homepage ({site_root}). This usually means the site blocked "
+            f"automated requests; you may need to match this page in by hand.",
+            file=sys.stderr,
+        )
+        all_urls = [site_root] + all_urls
+
+    urls = [u for u in all_urls if not is_excluded_url(u)]
 
     entries = []
     for i, url in enumerate(urls, 1):

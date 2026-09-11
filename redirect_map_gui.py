@@ -179,11 +179,11 @@ class RedirectMapApp(tk.Tk):
         )
 
         # Optional extra polish if the user has installed it -- safe no-op otherwise.
-        try:
-            import sv_ttk
-            sv_ttk.set_theme("light")
-        except ImportError:
-            pass
+        # try:
+        #     import sv_ttk
+        #     sv_ttk.set_theme("light")
+        # except ImportError:
+        #     pass
 
     def _size_to_content(self):
         """Open at whatever size actually fits everything (log panel included),

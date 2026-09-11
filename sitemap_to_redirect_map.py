@@ -26,7 +26,14 @@ from bs4 import BeautifulSoup
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
-HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; redirect-map-bot/1.0)"}
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 TIMEOUT = 15
 
 
@@ -180,8 +187,9 @@ def crawl_site(start_url: str, max_pages: int = 300) -> list:
     to a single row instead of recording each path separately.
     """
     root_netloc = urlparse(start_url).netloc.lower()
+    start_key = _canonicalize(start_url)
     to_visit = [start_url]
-    queued = {_canonicalize(start_url)}
+    queued = {start_key}
     seen = set()
     seen_resolved = set()
     found = []
@@ -196,7 +204,16 @@ def crawl_site(start_url: str, max_pages: int = 300) -> list:
         try:
             r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
             r.raise_for_status()
-        except requests.RequestException:
+        except requests.RequestException as exc:
+            if key == start_key:
+                print(
+                    f"  Warning: couldn't fetch the homepage ({url}): {exc}\n"
+                    f"  This usually means the site is blocking automated requests "
+                    f"(bot/security protection like Cloudflare), is temporarily "
+                    f"down, or the URL is wrong. The crawl can't discover any "
+                    f"pages if it can't even load the homepage.",
+                    file=sys.stderr,
+                )
             continue
 
         soup = BeautifulSoup(r.text, "html.parser")
@@ -484,14 +501,28 @@ def main():
         if added:
             print(f"Added {len(added)} manually-specified extra URL(s).", file=sys.stderr)
 
+    parsed = urlparse(args.site)
+    site_root = f"{parsed.scheme}://{parsed.netloc}/"
+
+    # Safety net: the homepage is always a known, valid URL regardless of
+    # whether the sitemap lookup or crawl fallback found anything at all
+    # (e.g. the site is blocking automated requests). Guarantee it's always
+    # in the workbook rather than ever writing a completely empty one.
+    if not any(_canonicalize(u) == _canonicalize(site_root) for u in all_urls):
+        print(
+            f"Warning: no pages were discovered at all -- adding just the "
+            f"homepage ({site_root}) so the workbook isn't empty. This "
+            f"usually means the site blocked automated requests; you may "
+            f"need to build this redirect map by hand.",
+            file=sys.stderr,
+        )
+        all_urls = [site_root] + all_urls
+
     urls = [u for u in all_urls if not is_excluded_url(u)]
     skipped = len(all_urls) - len(urls)
     if skipped:
         print(f"Skipping {skipped} excluded URL(s) (.php/.pdf, feeds, blog posts, /sitemap).", file=sys.stderr)
     print(f"Found {len(urls)} URLs. Fetching titles...", file=sys.stderr)
-
-    parsed = urlparse(args.site)
-    site_root = f"{parsed.scheme}://{parsed.netloc}/"
 
     entries = []
     skipped_posts = 0
