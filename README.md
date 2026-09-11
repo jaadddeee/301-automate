@@ -103,7 +103,7 @@ shortcut → right-click the shortcut → Properties → change the target so it
 starts with `pythonw.exe` instead of `python.exe`. Pin that shortcut
 wherever's convenient for one-click access.
 
-### Step ① — Build the redirect map from the OLD site
+### Step ① (301-RW) — Build the redirect map from the OLD site
 
 1. Paste the old (live) site's URL into the **Old site URL** box.
 2. The **Output file** name auto-fills based on the domain (e.g.
@@ -139,7 +139,7 @@ updates. **Skim the log** before moving on — check how many pages it
 found, whether it fell back to crawling, and whether the REST API turned
 up any extra orphaned pages.
 
-### Step ② — Match in the NEW site
+### Step ② (301-3D) — Match in the NEW site
 
 Once the new site is built (staging or live):
 
