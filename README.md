@@ -49,13 +49,6 @@ git --version
 pip install requests beautifulsoup4 lxml openpyxl
 ```
 
-Optional extra polish for the GUI (not required — it's picked up
-automatically if present, and the GUI looks fine without it):
-
-```
-pip install sv-ttk
-```
-
 Steps 1–3 only need to be done once per machine (or again if you reinstall
 Python).
 
